@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-autoresume"
+version = "0.6.0"
+description = "Conservative quota-aware Codex session resume watchdog"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+codex-relay = "codex_autoresume.cli:main"
+codex-autoresume = "codex_autoresume.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["codex_autoresume*"]
