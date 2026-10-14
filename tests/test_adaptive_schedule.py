@@ -124,6 +124,16 @@ class CacheAndWake(unittest.IsolatedAsyncioTestCase):
   await self.s.state();self.s.watcher.last_limits=limits(99);self.s.watcher.last_limits_at=self.s._quota_observed_at-5
   self.assertNotEqual((await self.s.state(force=False))['quotas']['rateLimits']['primary']['usedPercent'],99)
 
+ async def test_cached_render_does_not_replace_a_fresh_manual_read_with_old_monitor_data(self):
+  await self.s.dispatch('watch',{'thread_id':'s1','enabled':True})
+  fresh=await self.s.state()
+  with patch('codex_autoresume.gui_service.time.time',return_value=1):
+   self.s.store.record_check('s1',runtime_status='idle',turn_status='interrupted',goal_status='paused')
+  self.s.watcher.latest_threads['s1']={'id':'s1','status':'idle','goal':{'status':'paused'},'turns':[{'id':'old','status':'interrupted'}]}
+  cached=await self.s.state(force=False)
+  self.assertEqual(cached['threads'][0]['observation']['goal_status'],fresh['threads'][0]['observation']['goal_status'])
+  self.assertEqual(cached['threads'][0]['observation']['observed_at'],fresh['threads'][0]['observation']['observed_at'])
+
 class PauseWaitIntegration(unittest.IsolatedAsyncioTestCase):
  async def test_actual_reserve_pause_enters_deadline_sleep_and_ui_makes_no_rpc(self):
   from test_relay import BudgetClient

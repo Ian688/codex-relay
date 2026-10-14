@@ -99,7 +99,7 @@ class RelayService:
             row['job']=max(jobs,key=lambda j:j['updated_at']) if jobs else None
             check=self.store.check(tid)
             thread=self.watcher.latest_threads.get(tid)
-            if thread and not check.get('error'):
+            if thread and not check.get('error') and (check.get('observed_at') or 0)>=(row.get('observation',{}).get('observed_at') or 0):
                 row.update(status=state_name(thread.get('status')),turn_status=(thread.get('turns') or [{}])[-1].get('status'),
                            goal_status=(thread.get('goal') or {}).get('status'))
                 row['observation']=describe(thread,row['policy'],jobs,limits=limits,monitoring=self.monitoring,
