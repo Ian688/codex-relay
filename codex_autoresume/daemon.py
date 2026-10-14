@@ -28,6 +28,7 @@ class Watchdog:
         self.recent_hours = recent_hours
         self.dry_run = dry_run
         self.last_limits = None
+        self.last_quota_error = None
         self._turn_errors: dict[str, dict] = {}
         self._recent_auto_ids: set[str] = set()
 
@@ -185,6 +186,7 @@ class Watchdog:
             limits = await self.client.limits()
             self.last_limits = limits
         except Exception as exc:
+            self.last_quota_error = str(exc)
             log.warning("Quota read failed (fail closed): %s", exc)
             for j in due:
                 self.store.update(j["thread_id"], j["failed_turn_id"], "waiting", retry_at=now+300, detail="Rate-limit RPC unavailable")
@@ -346,6 +348,7 @@ class Watchdog:
                 log.warning('Budget pause requires attention for %s: %s', tid, exc)
 
     async def once(self):
+        self.last_quota_error = None
         await self.drain()
         await self.enforce_budgets()
         await self.scan()

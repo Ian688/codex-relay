@@ -38,3 +38,17 @@ class ServicePollingTest(unittest.IsolatedAsyncioTestCase):
   await self.s.dispatch('polling',{'check_seconds':45,'ui_seconds':90,'quota_wait_seconds':600})
   self.assertEqual(self.s.store.setting('polling')['quota_wait_seconds'],600)
   self.assertTrue(self.s.wake.is_set())
+
+ async def test_quota_rpc_failure_is_not_reported_as_successful_cycle(self):
+  self.s.store.watch('s1','acct-A')
+  self.s.last_cycle=123
+  async def failed_quota():
+   self.s.store.record_check('s1',turn_status='failed')
+   self.s.watcher.last_quota_error='quota RPC timeout'
+   self.s.monitoring=False
+  self.s.watcher.once=failed_quota
+  self.s.monitoring=True
+  await self.s.monitor_loop()
+  self.assertEqual(self.s.last_cycle,123)
+  self.assertEqual(self.s.poll_failures,1)
+  self.assertIn('Quota read failed',self.s.last_error)

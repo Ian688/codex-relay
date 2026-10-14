@@ -236,7 +236,10 @@ class RelayService:
                     cycle_start = time.time()
                     await self.watcher.once()
                     checks=[self.store.check(w['thread_id']) for w in self.store.watched()]
-                    if checks and all(not c.get('error') and c.get('checked_at',0)>=cycle_start for c in checks):
+                    if getattr(self.watcher,'last_quota_error',None):
+                        self.last_error='Quota read failed; waiting before the next check.'
+                        self.poll_failures+=1
+                    elif checks and all(not c.get('error') and c.get('checked_at',0)>=cycle_start for c in checks):
                         self.last_cycle=time.time();self.last_error=None;self.poll_failures=0
                     else:
                         self.last_error='部分会话监控检查未成功，请查看会话状态。'
