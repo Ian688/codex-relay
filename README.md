@@ -10,6 +10,8 @@ Independent community project by [Ian](https://github.com/Ian688). Not affiliate
 
 ![Codex Relay English interface](docs/images/cover.png)
 
+[Watch the 52-second English demo](https://github.com/Ian688/codex-relay/releases/download/v0.6.0/codex-relay-demo-en.webm) — a labeled replay of a verified real Goal control test, with controlled quota readings.
+
 ## What it does
 
 - **Resume after quota exhaustion:** wait for the service to permit usage and your recovery policy to be satisfied.
