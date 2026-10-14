@@ -16,9 +16,11 @@ These scheduling settings apply to the native desktop service. The standalone CL
 - When a wake occurs, recheck untouched waiting jobs even if their old retry timestamp is later. This is necessary to discover early quota resets. Never reset attempts or replay uncertain submissions.
 - Do not claim reliable push events. This release uses periodic probes/manual wake; a future verified event channel can provide an additional wake source.
 
+Known reset waits describe normal operation. Explicit refreshes, settings changes, connection errors and reconnection may trigger state resynchronization. These checks still cannot override the saved recovery policy.
+
 ## Display
 
-Show the selected session's wait mode, reason and next check, plus the next scheduler wake globally. Preserve actual quota/snapshot timestamps when rendering cached data.
+Show the selected session's wait mode, reason and next check, plus the next scheduler wake globally. Preserve actual quota/snapshot timestamps when rendering cached data. The global successful-check timestamp refers to the latest successful cycle for due sessions; it does not imply every waiting session was reread at that moment.
 
 ## Acceptance
 
