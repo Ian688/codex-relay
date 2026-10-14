@@ -10,6 +10,8 @@ Open **Codex Relay → Monitoring Settings…** (also available in the menu bar)
 | Dashboard refresh | 60 seconds | 20–300 seconds |
 | Idle quota-exhaustion check | 300 seconds | 60–1800 seconds |
 
+These are scheduler intervals, not a strict global RPC rate limiter. One check may perform multiple read-only requests for quota, session state and action verification.
+
 Saved values live in SQLite, not a watched text file. The running service reads them and wakes its scheduler; no Python restart is required. Per-session quota policy edits also apply to subsequent checks. Language changes require reopening the app.
 
 An active task keeps the normal interval. When inactive work is waiting on unavailable quota, checks slow down and wake near the quota gate's reset time (which includes a safety buffer), while still periodically revalidating conditions. Connection/check failures back off up to five minutes. A reset timestamp is a scheduling hint, never permission to resume.
