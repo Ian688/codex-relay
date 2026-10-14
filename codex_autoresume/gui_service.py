@@ -15,7 +15,7 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 from . import __version__
-from .polling import polling_settings, next_delay
+from .polling import polling_settings, schedule_plan
 
 log = logging.getLogger(__name__)
 from .daemon import Watchdog
@@ -60,9 +60,13 @@ class RelayService:
         self.next_check_at = None
         self.poll_failures = 0
         self._state_cache = None
-        self._state_cache_until = 0
         self._last_capability_probe = 0
         self._last_goal_enabled = None
+        self.schedule = {'mode':'monitor_paused','threads':{}}
+        self.force_monitor_check = True
+        self.thread_failures = {}
+        self._quota_observed_at = None
+        self.watcher.recheck_waiting = True
 
     async def connect(self):
         api_ready = not hasattr(self.client, 'proc') or bool(self.client.proc and self.client.proc.returncode is None)
@@ -76,16 +80,59 @@ class RelayService:
             self._last_capability_probe = time.time()
             self._last_goal_enabled = enabled
 
+    def add_schedule(self, observation, tid):
+        plan=self.schedule.get('threads',{}).get(tid,{}) if self.monitoring else dict(
+            mode='monitor_paused',reason='Monitoring paused; no automatic actions',next_check_at=None)
+        return dict(observation,schedule=plan)
+
+    def cached_state(self):
+        """Render fresh local monitor results without any Codex RPC or invented timestamp."""
+        import copy
+        value=copy.deepcopy(self._state_cache)
+        watched={w['thread_id'] for w in self.store.watched()}
+        limits=(self.watcher.last_limits if self.watcher.last_limits is not None and (self.watcher.last_limits_at or 0)>=(self._quota_observed_at or 0) else value.get('quotas'))
+        for row in value.get('threads',[]):
+            tid=row['id'];row['selected']=tid in watched
+            if tid not in watched:continue
+            row['policy']=self.store.policy(tid)
+            jobs=self.store.thread_jobs(tid)
+            row['job']=max(jobs,key=lambda j:j['updated_at']) if jobs else None
+            check=self.store.check(tid)
+            thread=self.watcher.latest_threads.get(tid)
+            if thread and not check.get('error'):
+                row.update(status=state_name(thread.get('status')),turn_status=(thread.get('turns') or [{}])[-1].get('status'),
+                           goal_status=(thread.get('goal') or {}).get('status'))
+                row['observation']=describe(thread,row['policy'],jobs,limits=limits,monitoring=self.monitoring,
+                    selected=True,check=check,observed_at=check.get('observed_at'),
+                    goal_control=getattr(self.client,'goal_control',False),goal_pause_control=getattr(self.client,'goal_pause_control',False))
+            elif check.get('error'):
+                row['status']='unavailable'
+                row['observation']=dict(turn_status='unknown',goal_status='unknown',relay_status='unavailable',
+                    reason='最近监控检查未成功；未据此发送新的恢复请求。',checked_at=check.get('checked_at'),observed_at=check.get('observed_at'))
+            row['observation']=self.add_schedule(row.get('observation',{}),tid)
+        jobs=[j for tid in watched for j in self.store.thread_jobs(tid)]
+        names={r['id']:r['name'] for r in value.get('threads',[])}
+        value.update(connected=getattr(self.client,'connected',value.get('connected',False)),monitoring=self.monitoring,
+            last_cycle=self.last_cycle,next_check_at=self.next_check_at,
+            error=self.last_error if self.monitoring else value.get('error'),cached=True,
+            quotas=limits,quota_checked_at=max(self._quota_observed_at or 0,self.watcher.last_limits_at or 0) or None,
+            polling=polling_settings(self.store.setting('polling',{})),schedule=self.schedule,
+            goal_control=getattr(self.client,'goal_capability',value.get('goal_control',{})),
+            watched_count=len(watched),unavailable_count=sum(r.get('selected') and r.get('status') in {'unavailable','notLoaded'} for r in value.get('threads',[])),
+            waiting_count=sum(j['status']=='waiting' for j in jobs),attention_count=sum(j['status']=='needs_attention' for j in jobs),
+            events=[dict(e,message=event_message(e)+(' · '+names.get(e['thread_id'],e['thread_id'][:8]) if e['thread_id']!='-' else '')) for e in self.store.events(30)])
+        return value
+
     async def state(self, force=True):
-        if not force and self._state_cache is not None and time.time() < self._state_cache_until:
-            return dict(self._state_cache,monitoring=self.monitoring,last_cycle=self.last_cycle,
-                        next_check_at=self.next_check_at,error=self.last_error or self._state_cache.get('error'),cached=True)
+        if not force and self._state_cache is not None:
+            return self.cached_state()
         quotas, threads = None, []
         connected = False
         error = self.last_error
         try:
             await self.connect()
             quotas = await self.client.limits()
+            self._quota_observed_at = time.time()
             threads = await self.client.list_threads(pages=2, limit=50)
             connected = True
             if not self.monitoring: error = None
@@ -129,6 +176,8 @@ class RelayService:
             if row['selected'] and 'observation' not in row:
                 row['observation'] = dict(turn_status='unknown',goal_status='unknown',relay_status='unavailable',
                     reason=row.get('live_error') or '当前无法读取会话，尚未确认状态。',checked_at=self.store.check(row['id']).get('checked_at'))
+        for row in result:
+            if row.get('observation'):row['observation']=self.add_schedule(row['observation'],row['id'])
         names={r['id']:r['name'] for r in result}
         events=[{**e,'message':event_message(e) + (' · '+names.get(e['thread_id'],e['thread_id'][:8]) if e['thread_id']!='-' else ''),
                  'name':names.get(e['thread_id'],'')} for e in self.store.events(30)]
@@ -139,9 +188,9 @@ class RelayService:
             'attention_count':sum(j['status']=='needs_attention' and j['thread_id'] in watched for j in jobs),
             'unavailable_count':sum(r['selected'] and r['status'] in {'unavailable','notLoaded'} for r in result),
             'last_cycle':self.last_cycle, 'updated_at':time.time(), 'events':events,
-            'polling':polling_settings(self.store.setting('polling',{})), 'next_check_at':self.next_check_at,'cached':False}
+            'polling':polling_settings(self.store.setting('polling',{})), 'next_check_at':self.next_check_at,'cached':False,
+            'schedule':self.schedule,'quota_checked_at':self._quota_observed_at}
         self._state_cache = result_state
-        self._state_cache_until = max(time.time()+result_state['polling']['ui_seconds'],self.next_check_at or 0)
         return result_state
 
     async def dispatch(self, action, params):
@@ -149,7 +198,12 @@ class RelayService:
             await self.stop_monitor()
             async with self.lock: return await self.state()
         async with self.lock:
-            if action == 'state': return await self.state(force=bool(params.get('force',True)))
+            if action == 'state':
+                force=bool(params.get('force',True))
+                if force and self.monitoring:
+                    self.force_monitor_check=True
+                    self.wake.set()
+                return await self.state(force=force)
             if action == 'polling':
                 settings=polling_settings(params)
                 self.store.set_setting('polling',settings)
@@ -200,12 +254,14 @@ class RelayService:
                 await self.connect()
                 t = await self.client.read_thread(params['thread_id'])
                 last = (t.get('turns') or [{}])[-1]
-                return {'id':t['id'], 'name':t.get('name'), 'status':state_name(t.get('status')),
+                detail = {'id':t['id'], 'name':t.get('name'), 'status':state_name(t.get('status')),
                     'goal_status':(t.get('goal') or {}).get('status'), 'model':t.get('model'),
                     'turn_status':last.get('status'), 'turn_id':last.get('id'),
                     'observation':describe(t,self.store.policy(t['id']),self.store.thread_jobs(t['id']),
                         monitoring=self.monitoring,selected=t['id'] in {w['thread_id'] for w in self.store.watched()},
                         check=self.store.check(t['id']),goal_control=getattr(self.client,'goal_control',False),goal_pause_control=getattr(self.client,'goal_pause_control',False))}
+                detail['observation']=self.add_schedule(detail['observation'],t['id'])
+                return detail
             elif action == 'monitor':
                 if not self.store.watched(): raise ValueError('先在会话列表中勾选至少一个会话。')
                 await self.connect()
@@ -220,6 +276,7 @@ class RelayService:
                     self.monitor_task = asyncio.create_task(self.monitor_loop())
             else:
                 raise ValueError('不支持的操作')
+            self.force_monitor_check=True
             self.wake.set()
             return await self.state()
 
@@ -227,40 +284,54 @@ class RelayService:
         while self.monitoring:
             settings=polling_settings(self.store.setting('polling',{}))
             self.watcher.interval=settings['check_seconds']
-            checks=[]
-            self.wake.clear()
+            self.wake.clear();checked_ids=set();checks=[]
             try:
                 async with self.lock:
                     if not self.monitoring: break
-                    await self.connect()
-                    cycle_start = time.time()
-                    await self.watcher.once()
-                    checks=[self.store.check(w['thread_id']) for w in self.store.watched()]
-                    if getattr(self.watcher,'last_quota_error',None):
-                        self.last_error='Quota read failed; waiting before the next check.'
-                        self.poll_failures+=1
-                    elif checks and all(not c.get('error') and c.get('checked_at',0)>=cycle_start for c in checks):
-                        self.last_cycle=time.time();self.last_error=None;self.poll_failures=0
-                    else:
-                        self.last_error='部分会话监控检查未成功，请查看会话状态。'
-                        self.poll_failures+=1
+                    watched=self.store.watched();now=time.time()
+                    old=self.schedule.get('threads',{})
+                    checked_ids={w['thread_id'] for w in watched if self.force_monitor_check or
+                                 old.get(w['thread_id'],{}).get('next_check_at',0)<=now+.05}
+                    self.force_monitor_check=False
+                    self.watcher.check_ids=checked_ids
+                    self.watcher.latest_threads={tid:v for tid,v in self.watcher.latest_threads.items() if tid in {w['thread_id'] for w in watched}}
+                    if checked_ids:
+                        await self.connect()
+                        cycle_start=time.time()
+                        await self.watcher.once()
+                        checks=[self.store.check(tid) for tid in checked_ids]
+                        for tid in checked_ids:
+                            c=self.store.check(tid)
+                            self.thread_failures[tid]=self.thread_failures.get(tid,0)+1 if c.get('error') else 0
+                        if getattr(self.watcher,'last_quota_error',None):
+                            self.last_error='Quota read failed; waiting before the next check.';self.poll_failures+=1
+                        elif checks and all(not c.get('error') and c.get('checked_at',0)>=cycle_start for c in checks):
+                            self.last_cycle=time.time();self.last_error=None;self.poll_failures=0
+                        else:
+                            self.last_error='部分会话监控检查未成功，请查看会话状态。';self.poll_failures=0
+                    records=[dict(thread_id=w['thread_id'],check=self.store.check(w['thread_id']),
+                        policy=self.store.policy(w['thread_id']),jobs=self.store.thread_jobs(w['thread_id']),
+                        failures=self.thread_failures.get(w['thread_id'],0)) for w in watched]
+                    self.schedule=schedule_plan(settings,records,self.watcher.last_limits,
+                        previous=old,checked_ids=checked_ids,failures=self.poll_failures)
             except Exception as exc:
                 self.last_error=friendly_error(exc);self.poll_failures+=1
                 log.warning('Monitor check failed: %s',exc)
-            if not self.monitoring: return
-            delay=next_delay(settings,checks,getattr(self.watcher,'last_limits',None),self.poll_failures)
-            self.next_check_at=time.time()+delay
-            # Invalidate once per actual cycle, not once per UI timer tick.
-            self._state_cache_until=0
-            log.info('Monitor cycle: failures=%s next_check_in=%ss',self.poll_failures,round(delay))
-            try: await asyncio.wait_for(self.wake.wait(),timeout=delay)
-            except asyncio.TimeoutError: pass
+                records=[dict(thread_id=w['thread_id'],check=self.store.check(w['thread_id'])) for w in self.store.watched()]
+                self.schedule=schedule_plan(settings,records,None,failures=self.poll_failures)
+            if not self.monitoring:return
+            self.next_check_at=self.schedule['next_check_at']
+            delay=self.schedule['delay_seconds']
+            log.info('Monitor schedule: mode=%s checked=%s next_check_in=%ss',self.schedule['mode'],len(checked_ids),round(delay))
+            try:await asyncio.wait_for(self.wake.wait(),timeout=delay)
+            except asyncio.TimeoutError:pass
 
     async def stop_monitor(self):
         if self.monitoring: self.store.event('-', 'monitor_stop', '已暂停监控，未停止 Codex 任务')
         self.monitoring = False
         self.wake.set()
         self.next_check_at = None
+        self.schedule = {"mode":"monitor_paused","threads":{}}
         task = self.monitor_task
         try:
             if task: await task

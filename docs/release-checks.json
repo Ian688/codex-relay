@@ -1,29 +1,19 @@
 {
-  "version": "0.6.0",
-  "python_tests": 130,
+  "version": "0.7.0",
+  "python_tests": 151,
   "python_passed": true,
+  "scope": "Adaptive desktop scheduler; deterministic clocks/test clients/isolated databases. No production task control exercised.",
   "english_ui": {
-    "count": 46,
+    "count": 50,
     "passed": true
   },
   "chinese_ui": {
-    "count": 46,
+    "count": 50,
     "passed": true
   },
   "accessibility": {
     "count": 30,
     "passed": true
   },
-  "codesign_verified": true,
-  "demo": "English read-only replay of previously verified real Goal control test; controlled quota readings",
-  "runtime_measurement": {
-    "connected": true,
-    "selected_count": 0,
-    "read_only": true,
-    "model_actions": 0,
-    "elapsed_seconds": 11.01,
-    "python_peak_rss_mib": 21.4,
-    "codex_process_rss_kib": 36084,
-    "limits": "One read-only startup, not a long-duration memory/leak benchmark; excludes native UI and other Codex processes."
-  }
+  "codesign_verified": true
 }

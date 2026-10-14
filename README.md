@@ -6,7 +6,7 @@ A native macOS dashboard and menu bar companion built with Codex. Select the ses
 
 Independent community project by [Ian](https://github.com/Ian688). Not affiliated with or endorsed by OpenAI. Relay respects account limits; it does not bypass them.
 
-[简体中文](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Validation](docs/VALIDATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Polling and diagnostics](docs/POLLING_AND_DIAGNOSTICS.md)
+[简体中文](README.zh-CN.md) · [Quick start](docs/QUICKSTART.md) · [Validation](docs/VALIDATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Polling and diagnostics](docs/POLLING_AND_DIAGNOSTICS.md) · [Adaptive scheduling](docs/ADAPTIVE_SCHEDULING.md)
 
 ![Codex Relay English interface](docs/images/cover.png)
 
@@ -31,7 +31,7 @@ Requirements: Python 3.11+, Xcode Command Line Tools to build, a logged-in Codex
 git clone https://github.com/Ian688/codex-relay.git
 cd codex-relay
 python3 scripts/build_macos.py
-open 'dist/Codex Relay 0.6.0.app'
+open 'dist/Codex Relay 0.7.0.app'
 ```
 
 Build on the Mac where you will run the app. The bundle uses your installed Python and Codex; it is not a self-contained universal installer. Locally ad-hoc signed, not Apple-notarized.
@@ -45,7 +45,9 @@ English is the default display language. Choose **Language / 语言 → 简体�
 
 ## Polling and diagnostics
 
-Use **Codex Relay → Monitoring Settings…** to change normal checks (default 30s), dashboard refresh (60s), and idle quota-wait checks (300s). Saved changes apply without restarting Python. Connection failures back off; automatic UI reads reuse cached snapshots. See [details and log locations](docs/POLLING_AND_DIAGNOSTICS.md).
+Use **Codex Relay → Monitoring Settings…** to change normal checks (default 30s), dashboard refresh (60s), and idle quota-wait checks (300s). Saved changes apply without restarting Python. Each session has its own schedule. Reserve pauses wait even when quota is usable. Automatic UI refresh uses local monitor data only; Manual Refresh forces reads and wakes eligibility checks. Disable **Check for early quota resets** to sleep until a known reset deadline. Remaining-threshold policies and unknown deadlines still require periodic probes. Connection failures back off. See [details and log locations](docs/POLLING_AND_DIAGNOSTICS.md).
+
+[Scheduler interface preview](docs/images/scheduler.png) (test data).
 
 ## Validation and limits
 
@@ -60,8 +62,8 @@ Recovery requires Relay and Codex to remain running and the Mac awake. Goal reco
 ```sh
 python3 -m unittest discover -s tests -v
 python3 scripts/build_macos.py
-'dist/Codex Relay 0.6.0.app/Contents/MacOS/CodexRelay' --language en --ui-test /tmp/relay-ui-en.json
-'dist/Codex Relay 0.6.0.app/Contents/MacOS/CodexRelay' --language zh --ui-test /tmp/relay-ui-zh.json
+'dist/Codex Relay 0.7.0.app/Contents/MacOS/CodexRelay' --language en --ui-test /tmp/relay-ui-en.json
+'dist/Codex Relay 0.7.0.app/Contents/MacOS/CodexRelay' --language zh --ui-test /tmp/relay-ui-zh.json
 ```
 
 The native AppKit UI communicates with the Python policy engine over stdin/stdout, with no HTTP listener. Accessibility control is opt-in. User content and raw evidence are preserved in their original language; interface translation does not alter actions or state.

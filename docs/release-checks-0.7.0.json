@@ -1,0 +1,19 @@
+{
+  "version": "0.7.0",
+  "python_tests": 151,
+  "python_passed": true,
+  "scope": "Adaptive desktop scheduler; deterministic clocks/test clients/isolated databases. No production task control exercised.",
+  "english_ui": {
+    "count": 50,
+    "passed": true
+  },
+  "chinese_ui": {
+    "count": 50,
+    "passed": true
+  },
+  "accessibility": {
+    "count": 30,
+    "passed": true
+  },
+  "codesign_verified": true
+}

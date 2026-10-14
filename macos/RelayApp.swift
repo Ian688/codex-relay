@@ -30,6 +30,12 @@ func statusText(_ value: String) -> String {
     return ["active":L("执行中"), "idle":L("已停止"), "notLoaded":L("未加载"), "waiting":L("等待恢复"), "running":L("已续接"), "done":L("续接轮次结束"), "goal_restored":L("Goal 恢复已确认"), "stale_record":L("历史恢复待清理"), "observing":L("监控中"), "unselected":L("未监控"), "filtered":L("已筛选"), "manual_goal":L("需在 Codex 恢复"), "unknown":L("未知"), "none":L("无 Goal"), "complete":L("目标完成"), "needs_attention":L("需检查"), "superseded":L("已取消恢复"), "disabled":L("已移出"), "paused":L("已暂停"), "completed":L("本轮已结束"), "interrupted":L("已停止"), "usageLimited":L("额度受限"), "budgetLimited":L("目标预算已用尽"), "blocked":L("等待处理"), "failed":L("执行失败"), "unavailable":L("待连接"), "inProgress":L("执行中")][value] ?? value
 }
 
+func scheduleModeText(_ mode:String) -> String {
+    let english:[String:String] = ["running":"Running checks","reset_wait":"Waiting for reset","remaining_wait":"Waiting for threshold","quota_wait":"Waiting for quota","manual_pause":"Manual pause: status only","idle":"Idle observation","connection_wait":"Connection backoff","monitor_paused":"Monitoring paused"]
+    let chinese:[String:String] = ["running":"运行检查","reset_wait":"等待刷新时间","remaining_wait":"等待恢复阈值","quota_wait":"等待额度恢复","manual_pause":"人工暂停：仅检查状态","idle":"低频状态观察","connection_wait":"连接退避","monitor_paused":"监控已暂停"]
+    return (RelayLanguage.current == "en" ? english : chinese)[mode] ?? mode
+}
+
 final class QuotaBar: NSView {
     var doubleValue: Double = 0 { didSet { needsDisplay = true; setAccessibilityLabel(L("已使用 \(Int(doubleValue))%")) } }
     override func draw(_ dirtyRect:NSRect) {
@@ -164,6 +170,7 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     var allThreads: [[String:Any]] = [], visibleThreads: [[String:Any]] = []
     var currentID: String?, state: [String:Any] = [:]
     var monitoring = false, connected = false, busy = false, dirty = false
+    var applyingCachedState = false
     var currentGoalStatus = "unknown", currentGoalControl: Bool?, currentGoalPauseControl: Bool?
     var timer: Timer?
     var demoStatePath: String?
@@ -184,6 +191,22 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         if let i = args.firstIndex(of:"--demo-state"), args.count > i+1 {
             demoStatePath = args[i+1]; backend.mock = true
             if let data = try? Data(contentsOf:URL(fileURLWithPath:args[i+1])), let value = (try? JSONSerialization.jsonObject(with:data)) as? [String:Any] { backend.fixture = value }
+        }
+        if backend.mock && args.contains("--preview-scheduler") {
+            let now = Date().timeIntervalSince1970
+            var rows = backend.fixture["threads"] as? [[String:Any]] ?? []
+            rows[0]["observation"] = ["turn_status":"interrupted","goal_status":"paused","relay_status":"waiting","goal_control":true,"goal_pause_control":true,"reason":"Relay confirmed a reserve pause. Waiting for the saved reset time.","checked_at":now-5,"schedule":["mode":"reset_wait","next_check_at":now+3600,"reason":"Waiting for saved reset; early probes disabled"]]
+            rows[0]["policy"] = ["mode":"reserve","stop_remaining":20.0,"resume_mode":"reset","resume_remaining":50.0,"goal_only":true,"window":"primary"]
+            backend.fixture["threads"] = rows
+            backend.fixture["monitoring"] = true
+            backend.fixture["waiting_count"] = 1
+            backend.fixture["quotas"] = ["rateLimits":["primary":["usedPercent":84.0,"resetsAt":now+3600],"secondary":["usedPercent":65.0,"resetsAt":now+604800]]]
+            backend.fixture["goal_control"] = ["enabled":true,"supported":true,"trusted":true,"ready":true]
+            backend.fixture["schedule"] = ["mode":"reset_wait","next_check_at":now+3600]
+            backend.fixture["polling"] = ["check_seconds":30,"ui_seconds":60,"quota_wait_seconds":300,"early_reset_checks":false]
+            backend.fixture["last_cycle"] = now-5
+            backend.fixture["quota_checked_at"] = now-5
+            backend.fixture["next_check_at"] = now+3600
         }
         quitAfterCapture = args.contains("--capture-and-exit")
         buildMenu(); buildWindow()
@@ -288,7 +311,7 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         for view in root.subviews { view.frame.origin.y += 140 }
         let bottom = box(NSColor(calibratedWhite:0.97,alpha:1)); bottom.frame = NSRect(x:0,y:0,width:1080,height:62); root.addSubview(bottom)
         footer = label(L("正在读取会话与额度…"),12,.regular,muted); footer.frame = NSRect(x:28,y:20,width:920,height:22); bottom.addSubview(footer)
-        let version = label("v0.6.0",11,.medium,muted); version.frame = NSRect(x:1000,y:22,width:55,height:18); bottom.addSubview(version)
+        let version = label("v0.7.0",11,.medium,muted); version.frame = NSRect(x:1000,y:22,width:55,height:18); bottom.addSubview(version)
         // Keep every setting reachable on smaller displays instead of clipping the enlarged inspector.
         if let screen = window.screen ?? NSScreen.main {
             let available = max(560, min(900, screen.visibleFrame.height - 60))
@@ -364,7 +387,7 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     @objc func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps:true) }
     @objc func quit() { NSApp.terminate(nil) }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Codex Relay", .applicationVersion:"0.6.0", .credits:NSAttributedString(string:L("续航接力\n所选会话的额度恢复与预算管理。\n关闭窗口后仍在菜单栏；退出应用会停止监控。"))])
+        NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"Codex Relay", .applicationVersion:"0.7.0", .credits:NSAttributedString(string:L("续航接力\n所选会话的额度恢复与预算管理。\n关闭窗口后仍在菜单栏；退出应用会停止监控。"))])
     }
     func setConnection(_ ok:Bool,_ message:String) {
         connected = ok; connection.stringValue = "● " + message
@@ -380,6 +403,8 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         }
     }
     func apply(_ value:[String:Any]) {
+        applyingCachedState = value["cached"] as? Bool ?? false
+        defer { applyingCachedState = false }
         let polling = value["polling"] as? [String:Any] ?? [:]
         let uiSeconds = (polling["ui_seconds"] as? NSNumber)?.doubleValue ?? 60
         if !backend.mock && (timer == nil || timer!.timeInterval != uiSeconds) {
@@ -416,6 +441,7 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 let remaining = max(0,100-used); quotaValue[index].stringValue = String(format:L("%.0f%% 剩余"),remaining); quotaBars[index].doubleValue = used
                 quotaReset[index].stringValue = L("已用 \(Int(used))% · 刷新于 \(timeText(q["resetsAt"]))")
             } else { quotaValue[index].stringValue = "—"; quotaBars[index].doubleValue = 0; quotaReset[index].stringValue = L("暂时无法读取额度") }
+            quotaReset[index].toolTip = (RelayLanguage.current == "en" ? "Quota actually checked: " : "额度实际读取时间：") + timeText(value["quota_checked_at"])
             if let minutes = q["windowDurationMins"] as? Int {
                 if minutes >= 1440 { quotaTitle[index].stringValue = L("\(minutes/1440) 天额度") } else { quotaTitle[index].stringValue = L("\(minutes/60) 小时额度") }
             }
@@ -431,11 +457,12 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             let name = self.allThreads.first(where:{$0["id"] as? String == tid})?["name"] as? String ?? String(tid.prefix(8))
             return "\(timeText(e["at"]))   " + ((e["message"] as? String).map(L) ?? "\(actionName) · \(name)")
         }.joined(separator:"\n")
-        let checkSeconds = (polling["check_seconds"] as? Int) ?? 30
+        let scheduler = value["schedule"] as? [String:Any] ?? [:]
+        let scheduleMode = scheduleModeText(scheduler["mode"] as? String ?? "")
         if RelayLanguage.current == "en" {
-            footer.stringValue = "\(monitoring ? "Monitoring" : "Monitoring paused") · selected \(count) · waiting \(waiting) · checks \(checkSeconds)s · next: \(timeText(value["next_check_at"])) · last successful check: \(timeText(value["last_cycle"]))"
+            footer.stringValue = "\(monitoring ? "Monitoring" : "Monitoring paused") · selected \(count) · waiting \(waiting) · \(scheduleMode) · next: \(timeText(value["next_check_at"])) · last successful check: \(timeText(value["last_cycle"]))"
         } else {
-            footer.stringValue = "\(monitoring ? "监控中" : "监控已暂停") · 已选 \(count) 个会话 · 等待恢复 \(waiting) · 常规检查 \(checkSeconds) 秒 · 下次：\(timeText(value["next_check_at"])) · 上次检查成功：\(timeText(value["last_cycle"]))"
+            footer.stringValue = "\(monitoring ? "监控中" : "监控已暂停") · 已选 \(count) 个会话 · 等待恢复 \(waiting) · \(scheduleMode) · 下次：\(timeText(value["next_check_at"])) · 上次检查成功：\(timeText(value["last_cycle"]))"
         }
         if let error = value["error"] as? String, !error.isEmpty { footer.stringValue = L(error); footer.textColor = .systemRed } else if external { footer.stringValue = L("另一个 Relay 实例正在监控；请先在原窗口暂停，或在其终端按 Ctrl+C。"); footer.textColor = muted } else if unavailable > 0 { footer.stringValue = L("\(unavailable) 个所选会话尚未连接，请在 Codex 中打开后刷新。"); footer.textColor = muted } else { footer.textColor = muted }
     }
@@ -502,7 +529,7 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let changed = currentID != id
         if changed { dirty = false; currentID = id }
         populate(t)
-        if changed, let id = id, connected {
+        if changed, let id = id, connected && !applyingCachedState {
             detailStatus.stringValue = L("正在读取会话状态…")
             backend.request("detail",["thread_id":id]) { [weak self] ok,result,error in
                 guard let self = self, self.currentID == id else { return }
@@ -552,8 +579,10 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         goalCapability.toolTip = currentGoalPauseControl == true ? L("按保存的额度策略暂停 Goal；恢复时切换对应 Codex 窗口并核验恢复按钮。不会删除 Goal，也不会恢复用户手动暂停的目标。") : L("辅助功能仅恢复 Goal：切换对应 Codex 窗口并核验恢复按钮；Goal 预算自动暂停尚未启用。发送普通“继续”不等于恢复 Goal。")
         openCodexButton.isEnabled = codexThreadURL(t["id"] as? String ?? currentID) != nil
         let reason = o["reason"] as? String ?? t["live_error"] as? String ?? L("等待读取状态；会话轮次与 Goal 状态分别确认。")
-        observationReason.stringValue = L(reason)
-        observationReason.toolTip = L(reason) + L("\n状态读取：") + timeText(o["checked_at"])
+        let schedule = o["schedule"] as? [String:Any] ?? [:]
+        let scheduledLine = schedule.isEmpty ? "" : scheduleModeText(schedule["mode"] as? String ?? "") + (RelayLanguage.current == "en" ? " · next: " : " · 下次：") + timeText(schedule["next_check_at"])
+        observationReason.stringValue = L(reason) + (scheduledLine.isEmpty ? "" : "\n" + scheduledLine)
+        observationReason.toolTip = L(reason) + "\n" + scheduledLine + "\n" + (schedule["reason"] as? String ?? "") + L("\n状态读取：") + timeText(o["checked_at"])
         for field in [detailStatus!,goalStatus!,relayStatus!] { field.toolTip = field.stringValue }
         enableInspector(watchButton.state == .on)
     }
@@ -626,19 +655,24 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let alert = NSAlert()
         let english = RelayLanguage.current == "en"
         alert.messageText = english ? "Monitoring Settings" : "监控频率设置"
-        alert.informativeText = english ? "Seconds. Saved changes apply to the next check. Quota waits slow down polling; a reset time alone never authorizes recovery." : "单位：秒。保存后下次检查生效。额度耗尽时降低频率；刷新时间本身不代表允许恢复。"
-        let content = NSView(frame:NSRect(x:0,y:0,width:440,height:115))
+        alert.informativeText = english ? "Seconds. Saved changes apply to the next check. Waiting sessions use their own schedule. Automatic dashboard refresh reads cache only. A reset time alone never authorizes recovery." : "单位：秒。保存后下次检查生效。等待中的会话按各自时间调度，界面自动刷新仅读缓存。刷新时间本身不代表允许恢复。"
+        let content = NSView(frame:NSRect(x:0,y:0,width:440,height:150))
         let specs:[(String,String,String,Int)] = [
             ("check_seconds","Normal checks (10–300s)","常规监控检查（10–300 秒）",30),
             ("ui_seconds","Dashboard refresh (20–300s)","界面刷新（20–300 秒）",60),
-            ("quota_wait_seconds","Quota wait checks (60–1800s)","额度耗尽检查（60–1800 秒）",300)]
+            ("quota_wait_seconds","Waiting probes (60–1800s)","等待状态探测（60–1800 秒）",300)]
         var fields:[NSTextField] = []
         for (index,spec) in specs.enumerated() {
             let title = label(english ? spec.1 : spec.2,12)
-            title.frame = NSRect(x:0,y:CGFloat(78-index*35),width:320,height:24);content.addSubview(title)
+            title.frame = NSRect(x:0,y:CGFloat(113-index*35),width:320,height:24);content.addSubview(title)
             let field = NSTextField(string:String(p[spec.0] as? Int ?? spec.3))
-            field.frame = NSRect(x:330,y:CGFloat(78-index*35),width:90,height:25);content.addSubview(field);fields.append(field)
+            field.frame = NSRect(x:330,y:CGFloat(113-index*35),width:90,height:25);content.addSubview(field);fields.append(field)
         }
+        let early = NSButton(checkboxWithTitle:english ? "Check for early quota resets" : "低频检查提前重置的额度",target:nil,action:nil)
+        early.frame = NSRect(x:0,y:0,width:440,height:26)
+        early.state = (p["early_reset_checks"] as? Bool ?? true) ? .on : .off
+        early.toolTip = english ? "If off, known reset waits sleep until the saved reset time. Remaining-threshold policies and unknown reset times still need periodic checks." : "关闭后，已知刷新时间的等待直接睡到该时间。按剩余额度阈值恢复或刷新时间未知时，仍需低频检查。"
+        content.addSubview(early)
         alert.accessoryView = content
         alert.addButton(withTitle:english ? "Save" : "保存")
         alert.addButton(withTitle:english ? "Cancel" : "取消")
@@ -649,6 +683,7 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 guard let number = Int(fields[index].stringValue) else { self.displayError(english ? "Enter whole seconds within the displayed ranges." : "请输入范围内的整数秒数。"); return }
                 payload[spec.0] = number
             }
+            payload["early_reset_checks"] = early.state == .on
             self.mutate("polling",payload)
         }
     }
@@ -766,11 +801,22 @@ final class RelayApp: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         toggleMonitor(); checks["pause_updates_window"] = !monitoring && monitorButton.title == L("开始监控所选会话")
         window.performClose(nil); checks["close_keeps_menu_bar"] = !window.isVisible && statusItem.button != nil
         showWindow()
+        checks["reset_schedule_wording"] = scheduleModeText("reset_wait") == (RelayLanguage.current == "en" ? "Waiting for reset" : "等待刷新时间")
+        let scheduled:[String:Any] = ["goal_status":"paused","turn_status":"interrupted","relay_status":"waiting","reason":"Policy pause","schedule":["mode":"reset_wait","next_check_at":1791979000]]
+        populateObservation(["observation":scheduled])
+        checks["selected_schedule_visible"] = observationReason.stringValue.contains(scheduleModeText("reset_wait")) && observationReason.stringValue.contains(timeText(1791979000))
+        mutate("polling",["check_seconds":30,"ui_seconds":60,"quota_wait_seconds":300,"early_reset_checks":false])
+        checks["strict_reset_option_roundtrip"] = (state["polling"] as? [String:Any])?["early_reset_checks"] as? Bool == false
         checks["polling_settings_menu_present"] = menu.items.contains { $0.action == #selector(configurePolling) }
         refreshState(force:false)
         checks["automatic_refresh_uses_cache"] = backend.lastMockAction == "state" && backend.lastMockParams["force"] as? Bool == false
         refresh()
         checks["manual_refresh_forces_read"] = backend.lastMockParams["force"] as? Bool == true
+        refreshState(force:false)
+        currentID = nil
+        var cachedFixture = backend.fixture; cachedFixture["cached"] = true
+        apply(cachedFixture)
+        checks["cached_auto_selection_does_not_read_detail"] = backend.lastMockAction == "state" && currentID != nil
         let result:[String:Any] = ["checks":checks,"passed":checks.values.allSatisfy{$0}]
         if let path = uiTestPath, let data = try? JSONSerialization.data(withJSONObject:result,options:[.prettyPrinted,.sortedKeys]) { try? data.write(to:URL(fileURLWithPath:path)); print(String(data:data,encoding:.utf8) ?? "") }
         NSApp.terminate(nil)

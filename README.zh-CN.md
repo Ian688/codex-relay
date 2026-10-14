@@ -12,7 +12,7 @@
 git clone https://github.com/Ian688/codex-relay.git
 cd codex-relay
 python3 scripts/build_macos.py
-open 'dist/Codex Relay 0.6.0.app'
+open 'dist/Codex Relay 0.7.0.app'
 ```
 
 这是使用本机 Python/Codex 的本地构建，非自带运行时的通用安装包。仅本地签名，未经 Apple 公证。
@@ -30,5 +30,7 @@ open 'dist/Codex Relay 0.6.0.app'
 ## 验证范围
 
 已在专用真实 Goal 中验证暂停、辅助功能恢复和新轮次启动。额度触发读数为隔离测试中的受控值，不是真实额度耗尽；未等待完整刷新窗口。版本变化、权限不足、目标变化、待处理输入或控件无法核验时停止操作。
+
+v0.7.0 为每个会话独立安排检查时间；按阈值暂停后也会进入等待。界面自动刷新仅读取本地监控结果，手动刷新会立即核验。关闭“低频检查提前重置的额度”后，已知刷新时间的等待直接睡到该时间；按剩余额度阈值恢复或时间未知时仍低频检查。人工暂停的 Goal 不自动恢复。
 
 详见英文 [验证说明](docs/VALIDATION.md) 和 [信息标准](docs/ARCHITECTURE.md)。MIT 许可。

@@ -29,6 +29,10 @@ class Watchdog:
         self.dry_run = dry_run
         self.last_limits = None
         self.last_quota_error = None
+        self.last_limits_at = None
+        self.check_ids = None
+        self.recheck_waiting = False
+        self.latest_threads = {}
         self._turn_errors: dict[str, dict] = {}
         self._recent_auto_ids: set[str] = set()
 
@@ -44,14 +48,23 @@ class Watchdog:
                     self._recent_auto_ids.add(info["id"])
         return watched
 
+    def remember(self, thread):
+        import copy
+        latest=(thread.get('turns') or [{}])[-1]
+        self.latest_threads[thread['id']]=copy.deepcopy(dict(id=thread['id'],name=thread.get('name'),
+            model=thread.get('model'),status=thread.get('status'),goal=thread.get('goal'),
+            requests=[{}] if thread.get('requests') else [],turns=[{k:latest[k] for k in
+                ('id','status','error','startedAt','turnStartedAtMs') if k in latest}]))
+
     async def scan(self):
         try:
             candidates = await self.client.list_threads(
-                pages=max(1, (self.max_threads + 49)//50), limit=50)
+                pages=max(1, (self.max_threads + 49)//50), limit=50) if self.store.setting('watch_all',False) else []
         except Exception as exc:
             log.warning("thread/list unavailable; checking explicit watched threads: %s", exc)
             candidates = []
         ids = self._watched_ids(candidates)
+        if self.check_ids is not None: ids &= self.check_ids
         if not ids:
             log.info("No watched threads. Try: codex-autoresume watch add THREAD_ID / watch all on")
         for thread_id in sorted(ids):
@@ -106,6 +119,7 @@ class Watchdog:
                     except Exception:
                         pass
                 self._reconcile_thread(thread_id, thread)
+                self.remember(thread)
             except Exception as exc:
                 self.store.record_check(thread_id, error=str(exc))
                 log.warning("Could not inspect %s: %s", thread_id[:16], exc)
@@ -174,17 +188,19 @@ class Watchdog:
                     elif status in {"failed", "interrupted", "cancelled", "canceled"} or err:
                         self.store.update(job["thread_id"], job["failed_turn_id"], "needs_attention", detail=f"Follow-up ended: {status or 'error'}")
 
-    async def process_queue(self):
+    async def process_queue(self, recheck_waiting=False):
         jobs = self.store.jobs(["waiting"])
         if not jobs:
             return
         now = time.time()
-        due = [j for j in jobs if j["retry_at"] <= now and j["attempts"] == 0]
+        due = [j for j in jobs if (j["retry_at"] <= now or recheck_waiting) and j["attempts"] == 0
+               and (self.check_ids is None or j['thread_id'] in self.check_ids)]
         if not due:
             return
         try:
             limits = await self.client.limits()
             self.last_limits = limits
+            self.last_limits_at = time.time()
         except Exception as exc:
             self.last_quota_error = str(exc)
             log.warning("Quota read failed (fail closed): %s", exc)
@@ -257,7 +273,7 @@ class Watchdog:
                     log.info("DRY RUN would resume %s", tid)
                     self.store.update(tid, failed, "waiting", retry_at=now, detail="Dry run: no message sent")
                     continue
-                if not self.store.reserve(tid, failed):
+                if not self.store.reserve(tid, failed, allow_early=recheck_waiting):
                     continue
                 # Durable reservation happens *before* network I/O. If a
                 # timeout occurs we can't prove whether a turn was created.
@@ -291,10 +307,14 @@ class Watchdog:
                 log.exception("Resume requires human review for thread %s", tid)
 
     async def enforce_budgets(self):
-        selected = [w for w in self.store.watched() if self.store.policy(w['thread_id'])['mode'] == 'reserve']
+        selected = [w for w in self.store.watched() if self.store.policy(w['thread_id'])['mode'] == 'reserve'
+                    and (self.check_ids is None or w['thread_id'] in self.check_ids)
+                    and (self.check_ids is None or not self.store.check(w['thread_id']) or
+                         self.store.check(w['thread_id']).get('turn_status')=='inProgress')]
         if not selected: return
         limits = await self.client.limits()
         self.last_limits = limits
+        self.last_limits_at = time.time()
         for watch in selected:
             tid = watch['thread_id']
             policy = self.store.policy(tid)
@@ -340,6 +360,9 @@ class Watchdog:
                         raise ProtocolError('Goal changed or was not paused by the budget interruption')
                 self.store.merge_context_once(tid, turn_id, 'goal', stopped.get('goal') or {})
                 self.store.update(tid, turn_id, 'waiting', detail=f"Budget paused at {used}% {policy['window']}")
+                self.remember(stopped)
+                self.store.record_check(tid,source='desktop',runtime_status=state_name(stopped.get('status')),
+                    turn_id=turn_id,turn_status='interrupted',goal_status=(stopped.get('goal') or {}).get('status'),reason='relay_budget_pause')
                 self.store.event(tid, 'pause', f'{turn_id}: {used}% {policy["window"]}')
             except Exception as exc:
                 for job in self.store.jobs(['pausing']):
@@ -350,9 +373,9 @@ class Watchdog:
     async def once(self):
         self.last_quota_error = None
         await self.drain()
-        await self.enforce_budgets()
         await self.scan()
-        await self.process_queue()
+        await self.enforce_budgets()
+        await self.process_queue(recheck_waiting=self.recheck_waiting)
         await self.drain()
 
     async def run(self):

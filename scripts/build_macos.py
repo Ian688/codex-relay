@@ -18,7 +18,7 @@ source=build/'RelayCombined.swift'
 source.write_text((root/'macos/GoalAccessibility.swift').read_text()+'\n'+(root/'macos/Localization.swift').read_text()+'\n'+(root/'macos/RelayApp.swift').read_text())
 subprocess.run(['swiftc', str(source), '-o', str(binary), '-framework', 'Cocoa', '-framework', 'ApplicationServices'], check=True)
 parser = argparse.ArgumentParser()
-parser.add_argument('--output', default='dist/Codex Relay 0.6.0.app')
+parser.add_argument('--output', default='dist/Codex Relay 0.7.0.app')
 args = parser.parse_args()
 app = root / args.output
 contents = app / 'Contents'
@@ -41,7 +41,7 @@ for size in [16,32,128,256,512]:
         subprocess.run(['sips','-z',str(size*scale),str(size*scale),str(icon),'--out',str(iconset/name)],check=True,stdout=subprocess.DEVNULL)
 subprocess.run(['iconutil','-c','icns',str(iconset),'-o',str(resources/'Relay.icns')],check=True)
 info = {'CFBundleIconFile':'Relay.icns','CFBundleName':'Codex Relay','CFBundleDisplayName':'Codex Relay','CFBundleIdentifier':'com.local.codex-relay.desktop',
-        'CFBundleExecutable':'CodexRelay','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.6.0','CFBundleVersion':'7',
+        'CFBundleExecutable':'CodexRelay','CFBundlePackageType':'APPL','CFBundleShortVersionString':'0.7.0','CFBundleVersion':'8',
         'LSMinimumSystemVersion':'10.15','NSHighResolutionCapable':True,'NSHumanReadableCopyright':'Codex Relay',
         'NSPrincipalClass':'NSApplication'}
 (contents/'Info.plist').write_bytes(plistlib.dumps(info))

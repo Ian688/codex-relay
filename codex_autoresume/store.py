@@ -118,10 +118,10 @@ class Store:
     def update(self, thread_id, failed_id, status, *, retry_at=None, detail=None, resumed_turn_id=None):
         self.db.execute("UPDATE jobs SET status=?,retry_at=COALESCE(?,retry_at),detail=?,resumed_turn_id=COALESCE(?,resumed_turn_id),updated_at=? WHERE thread_id=? AND failed_turn_id=?", (status, retry_at, detail, resumed_turn_id, time.time(), thread_id, failed_id))
 
-    def reserve(self, thread_id, failed_id):
-        """Reserve before network I/O. Crashes never silently duplicate a turn."""
+    def reserve(self, thread_id, failed_id, *, allow_early=False):
+        """Reserve atomically. allow_early is only for a freshly revalidated untouched job."""
         now = time.time()
-        row = self.db.execute("UPDATE jobs SET status='resuming', attempts=attempts+1, updated_at=? WHERE thread_id=? AND failed_turn_id=? AND status='waiting' AND attempts=0 AND retry_at<=?", (now, thread_id, failed_id, now))
+        row = self.db.execute("UPDATE jobs SET status='resuming', attempts=attempts+1, updated_at=? WHERE thread_id=? AND failed_turn_id=? AND status='waiting' AND attempts=0 AND (retry_at<=? OR ?)", (now, thread_id, failed_id, now, int(allow_early)))
         return row.rowcount == 1
 
     def abandoned(self):

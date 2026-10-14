@@ -1,13 +1,13 @@
-# Codex Relay 0.6.0 — English-first release
+# Codex Relay 0.7.0 — Adaptive waiting
 
-- English is now the default interface, including menus, policy descriptions, state reasons and known errors.
-- Chinese remains available through Language / 语言; restart to apply without silently restarting monitoring.
-- Configurable normal/UI/quota-wait polling, slow idle waiting, error backoff, cached automatic UI reads, rotating private logs, and graceful pipe shutdown.
-- Display timestamps use the local Mac timezone.
-- Longer English controls and policy labels fit the dashboard.
-- Added English quick start, architecture, validation, security guidance and showcase materials.
-- The demo replays a previously verified real Goal control test, using controlled quota readings. It is clearly labeled as a replay and is not a new full reset-window test.
+- Per-session wake deadlines: running work does not pull waiting sessions into frequent checks, and repeated active checks do not postpone another session's deadline.
+- Relay-confirmed reserve pauses enter policy waiting even when account quota is still usable.
+- Default low-frequency early-reset probes, with an optional strict wait until a known reset deadline. Missing deadlines and remaining-quota recovery still require probes.
+- Automatic dashboard refresh renders local monitor results only. Manual Refresh forces reads and wakes eligibility checks without overriding the saved policy.
+- Early quota recovery can recheck untouched jobs before an old retry timestamp. Atomic reservation, attempt counts, account/turn/Goal checks, strict reset policy, and anti-loop cooldown remain enforced.
+- Manual Goal pauses receive status-only checks, with no automatic recovery or quota query for the paused Goal.
+- UI shows the waiting mode and next check for the selected session. Quota tooltips retain the actual read timestamp.
 
-Build the app on your own Mac with `python3 scripts/build_macos.py`. The local bundle depends on installed Python 3.11+ and Codex. No notarization or cross-machine guarantee.
+This release changes scheduling, not the quota service or Goal button adapter. It does not rely on unverified push notifications. Validation uses deterministic clocks, isolated databases and test clients; no production Goal was interrupted for this change. The older published English video remains a labeled replay of the earlier Goal-control test, not a demonstration of every new scheduler setting.
 
-Goal control behavior retains v0.5 protections: explicit Accessibility opt-in, verified target, one action per episode, manual pause protection, and actual owner/new-turn confirmation.
+Build locally with `python3 scripts/build_macos.py`. The app depends on installed Python/Codex and is locally signed, not Apple-notarized. Desktop scheduling settings do not replace the standalone CLI's `--interval` loop.
